@@ -82,6 +82,79 @@ local layouts =
 }
 -- }}}
 
+-- {{{ Functions
+function get_memory_usage()
+    local ret = {}
+    for l in io.lines('/proc/meminfo') do
+        local k, v = l:match("([^:]+):%s+(%d+)")
+        ret[k] = tonumber(v)
+    end
+    return ret
+end
+
+function string_split(string, pat, plain)
+    local ret = {}
+    local pos = 0
+    local start, stop
+    local t_insert = table.insert
+    while true do
+        start, stop = string:find(pat, pos, plain)
+        if not start then
+            t_insert(ret, string:sub(pos))
+            break
+        end
+        t_insert(ret, string:sub(pos, start-1))
+        pos = stop + 1
+    end
+    return ret
+end
+
+function parse_key(string)
+    local t_insert = table.insert
+    local parts = string_split(string, '[+-]')
+    local last = table.remove(parts)
+    local ret = {}
+    for _, p in ipairs(parts) do
+        p_ = p:lower()
+        local m
+        if p_ == 'ctrl' then
+            m = 'Control'
+        elseif p_ == 'alt' then
+            m = 'Mod1'
+        else
+            m = p
+        end
+        t_insert(ret, m)
+    end
+    return ret, last
+end
+
+_key_map_cache = {}
+function map_client_key(client, key_map)
+    local t_insert = table.insert
+    local keys
+    if _key_map_cache[key_map] then
+        keys = awful.util.table.join(client:keys(), _key_map_cache[key_map])
+    else
+        keys = {}
+        for from, to in pairs(key_map) do
+            local mod, key = parse_key(from)
+            local key = awful.key(mod, key, function(c)
+                awful.util.spawn(
+                'xdotool key --clearmodifiers --window '
+                .. c.window .. ' ' .. to)
+            end)
+            for _, k in ipairs(key) do
+                t_insert(keys, k)
+            end
+        end
+        _key_map_cache[key_map] = keys
+        keys = awful.util.table.join(client:keys(), keys)
+    end
+    client:keys(keys)
+end
+-- }}}
+
 -- {{{ Wallpaper
 if beautiful.wallpaper then
     for s = 1, screen.count() do
@@ -92,7 +165,7 @@ end
 
 -- {{{ Tags
 -- Define a tag table which hold all screen tags.
-tags_name = { "1", "2", "3", "4", "5文件", "6聊天", "7GVIM", "8虚拟机", "9浏览器", '0' }
+tags_name = { "1", "2", "3", "4", "5文件", "6聊天", "7GVIM", "8", "9火狐", '0' }
 tags_layout = {
     awful.layout.suit.tile,
     awful.layout.suit.tile,
@@ -126,21 +199,22 @@ local myawesomemenu = {
 }
 
 local mymenu = {
-   { "&Thunar", "thunar /home/arch", '/usr/share/icons/gnome/32x32/apps/system-file-manager.png' },
+   { "&Thunar", "thunar /home/arch/tmpfs", '/usr/share/icons/oxygen/32x32/apps/system-file-manager.png' },
    { "&Wireshark", "wireshark", '/usr/share/icons/hicolor/32x32/apps/wireshark.png'},
    { "&VirtualBox", "VirtualBox", '/usr/share/icons/hicolor/32x32/mimetypes/virtualbox.png' },
    { "文档查看器 (&E)", "evince", '/usr/share/icons/hicolor/16x16/apps/evince.png' },
-   { "&Chrome", "google-chrome", '/usr/share/icons/Faience/apps/32/google-chrome.png' },
+   { "屏幕键盘", "matchbox-keyboard", '/usr/share/pixmaps/matchbox-keyboard.png' },
+   { "Idea", "/home/arch/Downloads/idea-IU-135.1230/bin/idea.sh"},
 }
 
 mymainmenu = awful.menu({ items = { { "Awesome", myawesomemenu, beautiful.awesome_icon },
           { "终端 (&T)", terminal, '/usr/share/icons/gnome/32x32/apps/utilities-terminal.png' },
           { "G&VIM", "gvim", '/usr/share/pixmaps/gvim.png' },
-          { "Chrome (&C)", "google-chrome", '/usr/share/icons/hicolor/32x32/apps/google-chrome.png' },
+          { "火狐 (&F)", "firefox", '/usr/share/icons/hicolor/32x32/apps/firefox.png' },
           { "常用 (&U)", mymenu },
           { "应用程序 (&A)", xdgmenu },
-          { "挂起 (&S)", "mysuspend" },
-          { "关机 (&H)", "systemctl poweroff", '/usr/share/icons/gnome/16x16/actions/gtk-quit.png' },
+          { "挂起 (&S)", "systemctl suspend" },
+          { "关机 (&H)", "zenity --question --title '关机' --text '你确定关机吗？' --default-no && systemctl poweroff", '/usr/share/icons/gnome/16x16/actions/gtk-quit.png' },
           }
 })
 
@@ -201,7 +275,7 @@ function update_netstat()
 end
 netdata = {}
 netwidget = fixwidthtextbox('(net)')
-netwidget.width = 85
+netwidget.width = 100
 netwidget:set_align('center')
 netwidget_clock = timer({ timeout = 2 })
 netwidget_clock:connect_signal("timeout", update_netstat)
@@ -211,17 +285,15 @@ update_netstat()
 
 -- {{{ memory usage indicator
 function update_memwidget()
-    local f = io.open('/proc/meminfo')
-    local total = f:read('*l')
-    local free = f:read('*l')
-    local buffered = f:read('*l')
-    local cached = f:read('*l')
-    f:close()
-    total = total:match('%d+')
-    free = free:match('%d+')
-    buffered = buffered:match('%d+')
-    cached = cached:match('%d+')
-    free = free + buffered + cached
+    local meminfo = get_memory_usage()
+    local free
+    if meminfo.MemAvailable then
+        -- Linux 3.14+
+        free = meminfo.MemAvailable
+    else
+        free = meminfo.MemFree + meminfo.Buffers + meminfo.Cached
+    end
+    local total = meminfo.MemTotal
     local percent = 100 - math.floor(free / total * 100 + 0.5)
     memwidget:set_markup('Mem <span color="#90ee90">'.. percent ..'%</span>')
 end
@@ -233,10 +305,38 @@ mem_clock:connect_signal("timeout", update_memwidget)
 mem_clock:start()
 -- }}}
 
+-- {{{ CPU Temperature
+function update_cputemp()
+    local pipe = io.popen('sensors')
+    if not pipe then
+        cputempwidget:set_markup('CPU <span color="red">ERR</span>℃')
+        return
+    end
+    local temp = 0
+    for line in pipe:lines() do
+        local newtemp = line:match('^Core [^:]+:%s+%+([0-9.]+)°C')
+        if newtemp then
+            newtemp = tonumber(newtemp)
+            if temp < newtemp then
+                temp = newtemp
+            end
+        end
+    end
+    pipe:close()
+    cputempwidget:set_markup('CPU <span color="#008000">'..temp..'</span>℃')
+end
+cputempwidget = fixwidthtextbox('CPU ??℃')
+cputempwidget.width = 60
+update_cputemp()
+cputemp_clock = timer({ timeout = 5 })
+cputemp_clock:connect_signal("timeout", update_cputemp)
+cputemp_clock:start()
+-- }}}
+
 --{{{ battery indicator, using smapi
 local battery_state = {
     unknown     = '<span color="yellow">? ',
-    idle        = '<span color="yellow">↯',
+    idle        = '<span color="#0000ff">↯',
     charging    = '<span color="green">+ ',
     discharging = '<span color="#1e90ff">– ',
 }
@@ -270,6 +370,9 @@ function update_batwidget()
                 }
                 last_bat_warning = t
             end
+            if percent <= 20 and not dont_hibernate then
+                awful.util.spawn("systemctl hibernate")
+            end
         end
         percent = '<span color="red">' .. percent .. '</span>'
     end
@@ -298,7 +401,7 @@ function volumectl (mode, widget)
         f = io.popen("pamixer --get-mute")
         local muted = f:read("*all")
         f:close()
-        if muted == "false" then
+        if muted:gsub('%s+', '') == "false" then
             volume = '♫' .. volume .. "%"
         else
             volume = '♫' .. volume .. "<span color='red'>M</span>"
@@ -418,6 +521,7 @@ for s = 1, screen.count() do
     -- Widgets that are aligned to the right
     local right_layout = wibox.layout.fixed.horizontal()
     right_layout:add(memwidget)
+    right_layout:add(cputempwidget)
     right_layout:add(batwidget)
     right_layout:add(netwidget)
     right_layout:add(volumewidget)
@@ -444,7 +548,7 @@ root.buttons(awful.util.table.join(
 -- }}}
 
 -- {{{ Key bindings
--- {{{ Functions for Numbers
+-- {{{ Functions
 local movebyrelidx = function (n, view) -- {{{
     -- view: 要转到那个 tag 吗？
     local screen = mouse.screen
@@ -502,6 +606,33 @@ local keynumber_reg = function (i, which) -- {{{
                 end
             end))
 end -- }}}
+
+-- {{{ per client keys
+tm_keys = {
+    ['alt+1'] = 'ctrl+1',
+    ['alt+2'] = 'ctrl+2',
+    ['alt+3'] = 'ctrl+3',
+    ['alt+4'] = 'ctrl+4',
+    ['alt+5'] = 'ctrl+5',
+    ['alt+6'] = 'ctrl+6',
+    ['alt+7'] = 'ctrl+7',
+    ['alt+8'] = 'ctrl+8',
+    ['alt+9'] = 'ctrl+9',
+    ['ctrl+f'] = 'Right',
+    ['ctrl+b'] = 'Left',
+    ['ctrl+p'] = 'Up',
+    ['ctrl+n'] = 'Down',
+    ['ctrl+a'] = 'ctrl+Home',
+    ['ctrl+e'] = 'ctrl+End',
+    -- 上/下一个标签页
+    ['ctrl+Page_Up'] = 'ctrl+Left',
+    ['ctrl+Page_Down'] = 'ctrl+Right',
+}
+-- not work, see https://bugs.launchpad.net/ubuntu/+source/xdotool/+bug/1011333
+evince_keys = {
+    b = 'Page_Up',
+}
+-- }}}
 -- }}}
 
 -- {{{ globalkeys
@@ -553,18 +684,20 @@ globalkeys = awful.util.table.join(
     awful.key({ modkey, "Control" }, "l",     function () awful.tag.incncol(-1)         end),
     awful.key({ modkey,           }, "space", function () awful.layout.inc(layouts,  1) end),
     awful.key({ modkey, "Shift"   }, "space", function () awful.layout.inc(layouts, -1) end),
+    awful.key({ modkey, "Shift"   }, "s",
+        function ()
+            -- because they may be not focusable
+            local c = mouse.object_under_pointer()
+            if c then
+                c.sticky = not c.sticky
+            end
+        end),
 
     -- Prompt
     awful.key({ modkey            }, "r",     function () mypromptbox[mouse.screen]:run() end),
-    awful.key({ "Mod1"            }, "F2",     function () mypromptbox[mouse.screen]:run() end),
+    awful.key({ "Mod1"            }, "F2",    function () mypromptbox[mouse.screen]:run() end),
 
-    awful.key({ modkey, "Shift"   }, "x",
-              function ()
-                  awful.prompt.run({ prompt = "Run Lua code: " },
-                  mypromptbox[mouse.screen].widget,
-                  awful.util.eval, nil,
-                  awful.util.getdir("cache") .. "/history_eval")
-              end),
+    awful.key({ modkey, "Shift"   }, "x", function () awful.util.spawn('openmsg_tm.py', false) end),
     -- Menubar
     awful.key({ modkey, "Mod1"    }, "p", function() menubar.show() end),
 
@@ -682,7 +815,7 @@ clientkeys = awful.util.table.join(
     awful.key({ modkey, "Control" }, "Return", function (c) c:swap(awful.client.getmaster()) end),
     awful.key({ modkey,           }, "o",      awful.client.movetoscreen                        ),
     awful.key({ modkey,           }, "a",      function (c) c.above = not c.above            end),
-    awful.key({ modkey, "Shift"   }, "r",      function (c) c:redraw()                       end),
+    awful.key({ modkey,           }, "s",      function (c) c.sticky = not c.sticky          end),
     awful.key({ modkey, "Shift"   }, "m",
         function (c)
             -- The client currently has the input focus, so it cannot be
@@ -702,23 +835,26 @@ clientkeys = awful.util.table.join(
 ) -- }}}
 
 -- {{{ Switching to the numbered tag
-for s = 1, screen.count() do
-    local keynumber = math.min(9, #tags[s]);
+do
+    local keynumber = math.min(9, #tags[1]);
     for i = 1, keynumber do
         keynumber_reg(i)
     end
-    if #tags[s] >= 10 then
+    if #tags[1] >= 10 then
         keynumber_reg(0, 10)
     end
 end
 -- }}}
 
--- Whether to raise the client on single click
-raise_on_click = {}
-
 -- {{{ clientbuttons
 clientbuttons = awful.util.table.join(
-    awful.button({ }, 1, function (c) client.focus = c; if raise_on_click[c] then c:raise() end end),
+    awful.button({ }, 1, function (c)
+        client.focus = c
+        if c.class and (c.class == 'Gimp' or c.class == 'Gimp-2.8') then
+        else
+            c:raise()
+        end
+    end),
     awful.button({ modkey }, 1, awful.mouse.client.move),
     awful.button({ modkey }, 2, function (c) client.focus = c; c:kill() end),
     awful.button({ modkey }, 3, function (c) awful.mouse.client.resize(c, "bottom_right") end))
@@ -795,6 +931,10 @@ awful.rules.rules = {
       instance = {'TM.exe', 'QQ.exe'},
     },
     properties = {
+      -- This, together with myfocus_filter, make the popup menus flicker taskbars less
+      -- Non-focusable menus may cause TM2013preview1 to not highlight menu
+      -- items on hover and crash.
+      focusable = true,
       floating = true,
       border_width = 0,
     }
@@ -803,6 +943,17 @@ awful.rules.rules = {
       -- mainly for picpick
       class = "Wine",
       above = true,
+    },
+    properties = {
+      floating = true,
+      border_width = 0,
+    }
+  }, {
+    rule = {
+      -- for WinHex
+      class = "Wine",
+      instance = "WinHex.exe",
+      name = "数据解释器",
     },
     properties = {
       floating = true,
@@ -832,10 +983,11 @@ awful.rules.rules = {
   }, {
     rule_any = {
       class = {
-        'MPlayer', 'Flashplayer', 'Gnome-mplayer', 'Totem',
+        'Flashplayer', 'Gnome-mplayer', 'Totem',
         'Eog', 'feh', 'Display', 'Gimp', 'Gimp-2.6',
         'Screenkey', 'TempTerm', 'AliWangWang',
         'Dia', 'Pavucontrol', 'Stardict', 'XEyes', 'Skype',
+        'Xfce4-appfinder',
       },
       name = {
         '文件传输', 'Firefox 首选项', '暂存器', 'Keyboard',
@@ -850,6 +1002,21 @@ awful.rules.rules = {
     },
     properties = {
       floating = true,
+    }
+  }, {
+    rule = {
+      instance = "xfce4-notifyd",
+    },
+    properties = {
+      border_width = 0,
+      focus = false,
+    }
+  },{ --flash播放器全屏问题
+      rule = 
+      { instance = "plugin-container" 
+    },
+    properties = { 
+      floating = true, 
     }
   },
 }
@@ -880,12 +1047,6 @@ client.connect_signal("manage", function (c, startup)
         end
     end)
 
-    if c.class and (c.class == 'Gimp' or c.class == 'Gimp-2.8') then
-        raise_on_click[c] = false
-    else
-        raise_on_click[c] = true
-    end
-
     if not startup then
         -- Set the windows at the slave,
         -- i.e. put it at the end of others instead of setting it master.
@@ -909,6 +1070,15 @@ client.connect_signal("manage", function (c, startup)
         else
             awful.client.movetotag(tags[mouse.screen][6], c)
         end
+    elseif c.instance == 'TM.exe' then -- TM2013
+        map_client_key(c, tm_keys)
+        if c.name and (c.name:match('^腾讯') or c.name == 'QQ版本升级') and c.above then
+            qqad_blocked = qqad_blocked + 1
+            naughty.notify{title="QQ广告屏蔽 " .. qqad_blocked, text="检测到一个符合条件的窗口，标题为".. c.name .."。"}
+            c:kill()
+        end
+    elseif c.class == 'Evince' then
+        map_client_key(c, evince_keys)
     elseif c.instance == 'QQ.exe' then
         local handled
         -- naughty.notify({title="新窗口", text="名称为 ".. c.name .."，class 为 " .. c.class:gsub('&', '&amp;') .. " 的窗口已接受管理。", preset=naughty.config.presets.critical})
@@ -929,18 +1099,23 @@ client.connect_signal("manage", function (c, startup)
             end
         end
         handled = false
+      elseif c.class == 'MPlayer' or c.class == 'mpv' then
+        awful.client.floating.set(c, true)
+        awful.placement.centered(c)
     end
 end)
 
 client.connect_signal("focus", function(c) c.border_color = beautiful.border_focus end)
 client.connect_signal("unfocus", function(c) c.border_color = beautiful.border_normal end)
-
-client.add_signal("unmanage", function(c)
-    raise_on_click[c] = nil
-end)
 -- }}}
 
 -- {{{ other things
+pcall(function()
+    package.cpath = package.cpath .. ';/home/lilydjwg/scripts/lua/cmod/?.so'
+    local clua = require('clua')
+    clua.setsubreap(true)
+    clua.ignore_SIGCHLD()
+end)
 awful.util.spawn("awesomeup", false)
 awful.tag.viewonly(tags[1][6])
 -- vim: set fdm=marker et sw=4:
