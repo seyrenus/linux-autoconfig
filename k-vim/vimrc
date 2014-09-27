@@ -21,7 +21,8 @@
 
 "set guifont=Monaco:h20          " 字体 && 字号
 "配色方案
-
+"vim markdown
+"filetype plugin on
 " history存储长度。
 set history=2000
 
@@ -620,6 +621,11 @@ map - <Plug>(expand_region_shrink)
 
 "for mutil cursor
 Bundle 'terryma/vim-multiple-cursors'
+
+
+"emment for vim
+Bundle 'mattn/emmet-vim'
+
 " Default mapping
 let g:multi_cursor_next_key='<C-m>'
 let g:multi_cursor_prev_key='<C-p>'
